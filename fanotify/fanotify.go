@@ -199,6 +199,7 @@ func (nd *NotifyFD) Response(ev *EventMetadata, allow bool) error {
 func (nd *NotifyFD) GetFd() int32 {
 	return nd.fd
 }
+
 func (nd *NotifyFD) Close() {
 	nd.f.Close()
 }

@@ -3,6 +3,7 @@ package fanotify
 import (
 	"fmt"
 	log "github.com/sirupsen/logrus"
+	"github.com/wadeling/fanotify_demo/pkg"
 	"golang.org/x/sys/unix"
 	"os"
 	"sync"
@@ -66,6 +67,8 @@ func NewFileAccessCtrl() (*FileAccessCtrl, bool) {
 		fa.bEnabled = false // reset it back
 		return nil, false
 	}
+
+	// FAN_OPEN_PERM can detect operation like: echo "a" > a.txt ,while FAN_OPEN_EXEC_PERM can't
 	fa.cflag = FAN_OPEN_PERM
 
 	// preferable flag
@@ -112,7 +115,7 @@ func (fa *FileAccessCtrl) monitorFilePermissionEvents() {
 	pfd[0].Events = unix.POLLIN
 	log.WithFields(log.Fields{"pfd": pfd[0]}).Info("FA: start")
 	for {
-		n, err := unix.Poll(pfd, 5000) // wait 1 sec
+		n, err := unix.Poll(pfd, 5000) // wait 5 sec
 		log.Debugf("poll get event:%d", n)
 		if err != nil && err != unix.EINTR { // not interrupted by a signal
 			log.WithFields(log.Fields{"err": err}).Error("FA: poll returns error")
@@ -147,24 +150,39 @@ func (fa *FileAccessCtrl) handleEvents() {
 			log.WithFields(log.Fields{"err": err}).Error("handle event err")
 			return
 		}
-		log.WithFields(log.Fields{"event": *ev}).Debug("event info")
 
-		if ev.Version == FANOTIFY_METADATA_VERSION {
-			fa.lockMux()
-			err := fa.fanfd.Response(ev, false)
-			if err != nil {
-				log.WithFields(log.Fields{"err": err}).Error("response allow err")
+		go func() {
+			// print some info
+			evPid := ev.Pid
+			evProcessName, _ := pkg.ProcessName(evPid)
+			evFileName := ev.File.Name()
+			evFilePath, _ := eventFilePath(ev)
+
+			log.WithFields(log.Fields{
+				"pid":         evPid,
+				"processName": evProcessName,
+				"fileName":    evFileName,
+				"filePath":    evFilePath}).
+				Debug("event info")
+
+			if ev.Version == FANOTIFY_METADATA_VERSION {
+				fa.lockMux()
+				err := fa.fanfd.Response(ev, true)
+				if err != nil {
+					log.WithFields(log.Fields{"err": err}).Error("response allow err")
+				} else {
+					log.Debug("response allow ok")
+				}
+				fa.unlockMux()
 			} else {
-				log.Debug("response allow ok")
+				log.WithFields(log.Fields{"ev": ev}).Error("FA: wrong metadata version")
 			}
-			fa.unlockMux()
-		} else {
-			log.WithFields(log.Fields{"ev": ev}).Error("FA: wrong metadata version")
-		}
-		err = ev.File.Close()
-		if err != nil {
-			log.WithFields(log.Fields{"err": err}).Error("ev file close err.")
-		}
+			err = ev.File.Close()
+			if err != nil {
+				log.WithFields(log.Fields{"err": err}).Error("ev file close err.")
+			}
+		}()
+
 	}
 }
 
@@ -202,4 +220,9 @@ func (fa *FileAccessCtrl) addDirMarks(pid int, dirs []string) (bool, int) {
 		}
 	}
 	return true, len(dirs)
+}
+
+func eventFilePath(ev *EventMetadata) (string, error) {
+	path, err := os.Readlink(fmt.Sprintf(procSelfFd, ev.File.Fd()))
+	return path, err
 }

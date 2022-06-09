@@ -6,6 +6,7 @@ import (
 	"github.com/wadeling/fanotify_demo/pkg"
 	"golang.org/x/sys/unix"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -152,6 +153,13 @@ func (fa *FileAccessCtrl) handleEvents() {
 		}
 
 		go func() {
+			defer func() {
+				err = ev.File.Close()
+				if err != nil {
+					log.WithFields(log.Fields{"err": err}).Error("ev file close err.")
+				}
+			}()
+
 			// print some info
 			evPid := ev.Pid
 			evProcessName, _ := pkg.ProcessName(evPid)
@@ -165,22 +173,40 @@ func (fa *FileAccessCtrl) handleEvents() {
 				"filePath":    evFilePath}).
 				Debug("event info")
 
-			if ev.Version == FANOTIFY_METADATA_VERSION {
-				fa.lockMux()
+			if ev.Version != FANOTIFY_METADATA_VERSION {
+				log.WithFields(log.Fields{"ev": ev}).Error("FA: wrong metadata version")
+				return
+			}
+
+			// process white list
+			if strings.Contains(evProcessName, "modify.sh") {
 				err := fa.fanfd.Response(ev, true)
 				if err != nil {
 					log.WithFields(log.Fields{"err": err}).Error("response allow err")
 				} else {
 					log.Debug("response allow ok")
 				}
-				fa.unlockMux()
-			} else {
-				log.WithFields(log.Fields{"ev": ev}).Error("FA: wrong metadata version")
+				return
 			}
-			err = ev.File.Close()
+
+			//fa.lockMux()
+			//test: change file content
+			err := pkg.ModifyFileContent(evFilePath)
 			if err != nil {
-				log.WithFields(log.Fields{"err": err}).Error("ev file close err.")
+				log.WithFields(log.Fields{"err": err, "file": evFilePath}).Debug("modify file content failed")
+				return
+			} else {
+				log.WithFields(log.Fields{"file": evFilePath}).Debug("modify file content ok")
 			}
+
+			err = fa.fanfd.Response(ev, true)
+			if err != nil {
+				log.WithFields(log.Fields{"err": err}).Error("response allow err")
+			} else {
+				log.Debug("response allow ok")
+			}
+			//fa.unlockMux()
+
 		}()
 
 	}

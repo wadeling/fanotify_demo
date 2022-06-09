@@ -3,11 +3,13 @@ package pkg
 import (
 	"fmt"
 	"io/ioutil"
+	"os/exec"
 )
 
 func ModifyFileContent(path string) error {
+	cmd := exec.Command("./script/modify.sh", path)
 
-	return nil
+	return cmd.Run()
 }
 
 func ProcessName(pid int32) (string, error) {
